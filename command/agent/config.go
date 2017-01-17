@@ -132,6 +132,23 @@ type RetryJoinEC2 struct {
 	SecretAccessKey string `mapstructure:"secret_access_key"`
 }
 
+// RetryJoinECS is used to configure discovery of instances via Aliyun's ECS api
+type RetryJoinECS struct {
+	// The Aliyun region to look for instances in
+	Region string `mapstructure:"region"`
+
+	// The Aliyun ECS network type to use when filtering instances
+	NetworkType string `mapstructure:"network_type"`
+
+	// The tag key and value to use when filtering instances
+	TagKey   string `mapstructure:"tag_key"`
+	TagValue string `mapstructure:"tag_value"`
+
+	// The Aliyun credentials to use for making requests to ECS
+	AccessKeyID     string `mapstructure:"access_key_id"`
+	SecretAccessKey string `mapstructure:"secret_access_key"`
+}
+
 // Performance is used to tune the performance of Consul's subsystems.
 type Performance struct {
 	// RaftMultiplier is an integer multiplier used to scale Raft timing
@@ -420,6 +437,9 @@ type Config struct {
 
 	// RetryJoinEC2 configuration
 	RetryJoinEC2 RetryJoinEC2 `mapstructure:"retry_join_ec2"`
+
+	// RetryJoinECS configuration
+	RetryJoinECS RetryJoinECS `mapstructure:"retry_join_ecs"`
 
 	// RetryJoinWan is a list of addresses to join -wan with retry enabled.
 	RetryJoinWan []string `mapstructure:"retry_join_wan"`
@@ -1439,6 +1459,24 @@ func MergeConfig(a, b *Config) *Config {
 	}
 	if b.RetryJoinEC2.TagValue != "" {
 		result.RetryJoinEC2.TagValue = b.RetryJoinEC2.TagValue
+	}
+	if b.RetryJoinECS.AccessKeyID != "" {
+		result.RetryJoinECS.AccessKeyID = b.RetryJoinECS.AccessKeyID
+	}
+	if b.RetryJoinECS.SecretAccessKey != "" {
+		result.RetryJoinECS.SecretAccessKey = b.RetryJoinECS.SecretAccessKey
+	}
+	if b.RetryJoinECS.Region != "" {
+		result.RetryJoinECS.Region = b.RetryJoinECS.Region
+	}
+	if b.RetryJoinECS.NetworkType != "" {
+		result.RetryJoinECS.NetworkType = b.RetryJoinECS.NetworkType
+	}
+	if b.RetryJoinECS.TagKey != "" {
+		result.RetryJoinECS.TagKey = b.RetryJoinECS.TagKey
+	}
+	if b.RetryJoinECS.TagValue != "" {
+		result.RetryJoinECS.TagValue = b.RetryJoinECS.TagValue
 	}
 	if b.RetryMaxAttemptsWan != 0 {
 		result.RetryMaxAttemptsWan = b.RetryMaxAttemptsWan

@@ -24,6 +24,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/denverdino/aliyungo/common"
+	"github.com/denverdino/aliyungo/ecs"
 	"github.com/hashicorp/consul/lib"
 	"github.com/hashicorp/consul/logger"
 	"github.com/hashicorp/consul/watch"
@@ -126,12 +128,23 @@ func (c *Command) readConfig() *Config {
 		"number of retries for joining")
 	cmdFlags.StringVar(&retryInterval, "retry-interval", "",
 		"interval between join attempts")
+
 	cmdFlags.StringVar(&cmdConfig.RetryJoinEC2.Region, "retry-join-ec2-region", "",
 		"EC2 Region to discover servers in")
 	cmdFlags.StringVar(&cmdConfig.RetryJoinEC2.TagKey, "retry-join-ec2-tag-key", "",
 		"EC2 tag key to filter on for server discovery")
 	cmdFlags.StringVar(&cmdConfig.RetryJoinEC2.TagValue, "retry-join-ec2-tag-value", "",
 		"EC2 tag value to filter on for server discovery")
+
+	cmdFlags.StringVar(&cmdConfig.RetryJoinECS.Region, "retry-join-ecs-region", "",
+		"ECS Region to discover servers in")
+	cmdFlags.StringVar(&cmdConfig.RetryJoinECS.NetworkType, "retry-join-ecs-network-type", "",
+		"ECS network type to filter on for server discovery")
+	cmdFlags.StringVar(&cmdConfig.RetryJoinECS.TagKey, "retry-join-ecs-tag-key", "",
+		"ECS tag key to filter on for server discovery")
+	cmdFlags.StringVar(&cmdConfig.RetryJoinECS.TagValue, "retry-join-ecs-tag-value", "",
+		"ECS tag value to filter on for server discovery")
+
 	cmdFlags.Var((*AppendSliceValue)(&cmdConfig.RetryJoinWan), "retry-join-wan",
 		"address of agent to join -wan on startup with retry")
 	cmdFlags.IntVar(&cmdConfig.RetryMaxAttemptsWan, "retry-max-wan", 0,
@@ -364,6 +377,14 @@ func (c *Command) readConfig() *Config {
 		}
 	}
 
+	// Need both tag key and value for ECS discovery
+	if config.RetryJoinECS.TagKey != "" || config.RetryJoinECS.TagValue != "" {
+		if config.RetryJoinECS.TagKey == "" || config.RetryJoinECS.TagValue == "" || config.RetryJoinECS.NetworkType == "" {
+			c.Ui.Error("tag key and value and networktype are both required for ECS retry-join")
+			return nil
+		}
+	}
+
 	// Set the version info
 	config.Revision = c.Revision
 	config.Version = c.Version
@@ -471,6 +492,57 @@ func (c *Config) discoverEc2Hosts(logger *log.Logger) ([]string, error) {
 			if instance.PrivateIpAddress != nil {
 				servers = append(servers, *instance.PrivateIpAddress)
 			}
+		}
+	}
+
+	return servers, nil
+}
+
+// discoverEcsHosts searches an Aliyun region, returning a list of instance private network ips
+// where ECSTagKey = ECSTagValue
+func (c *Config) discoverEcsHosts(logger *log.Logger) ([]string, error) {
+	config := c.RetryJoinECS
+
+	if config.AccessKeyID == "" || config.SecretAccessKey == "" || config.NetworkType == "" || config.Region == "" {
+		logger.Printf("[ERROR] AccessKeyID, SecretAccessKey, NetworkType, Region are both required.")
+		return nil, nil
+	}
+
+	client := ecs.NewClient(config.AccessKeyID, config.SecretAccessKey)
+
+	instanceArgs := &ecs.DescribeInstancesArgs{
+		RegionId:            common.Region(config.Region),
+		InstanceNetworkType: config.NetworkType,
+		Tag: map[string]string{
+			config.TagKey: config.TagValue,
+		},
+		Pagination: common.Pagination{
+			PageSize: 50,
+		},
+	}
+
+	instances, _, err := client.DescribeInstances(instanceArgs)
+
+	if err != nil {
+		logger.Printf("[ERROR] Describe aliyun ecs instance failed.")
+		return nil, err
+	}
+
+	var servers []string
+
+	for _, instance := range instances {
+		switch instance.InstanceNetworkType {
+		case "classic":
+			if instance.InnerIpAddress.IpAddress != nil {
+				servers = append(servers, instance.InnerIpAddress.IpAddress[0])
+			}
+		case "vpc":
+			if instance.VpcAttributes.PrivateIpAddress.IpAddress != nil {
+				servers = append(servers, instance.VpcAttributes.PrivateIpAddress.IpAddress[0])
+			}
+		default:
+			logger.Printf("[ERROR] Wrong network type or network type not specialfied.")
+			return nil, nil
 		}
 	}
 
@@ -642,8 +714,9 @@ func (c *Command) startupJoinWan(config *Config) error {
 // retries are exhausted.
 func (c *Command) retryJoin(config *Config, errCh chan<- struct{}) {
 	ec2Enabled := config.RetryJoinEC2.TagKey != "" && config.RetryJoinEC2.TagValue != ""
+	ecsEnabled := config.RetryJoinECS.TagKey != "" && config.RetryJoinECS.TagValue != ""
 
-	if len(config.RetryJoin) == 0 && !ec2Enabled {
+	if (len(config.RetryJoin) == 0 && !ec2Enabled) || (len(config.RetryJoin) == 0 && !ecsEnabled) {
 		return
 	}
 
@@ -660,6 +733,13 @@ func (c *Command) retryJoin(config *Config, errCh chan<- struct{}) {
 				logger.Printf("[ERROR] agent: Unable to query EC2 insances: %s", err)
 			}
 			logger.Printf("[INFO] agent: Discovered %d servers from EC2...", len(servers))
+		}
+		if ecsEnabled {
+			servers, err = config.discoverEcsHosts(logger)
+			if err != nil {
+				logger.Printf("[ERROR] agent: Unable to query ECS insances: %s", err)
+			}
+			logger.Printf("[INFO] agent: Discovered %d servers from ECS...", len(servers))
 		}
 
 		servers = append(servers, config.RetryJoin...)
@@ -1224,6 +1304,11 @@ Options:
   -retry-join-ec2-region    EC2 Region to use for discovering servers to join.
   -retry-join-ec2-tag-key   EC2 tag key to filter on for server discovery
   -retry-join-ec2-tag-value EC2 tag value to filter on for server discovery
+  -retry-join-ecs-region    ECS Region to use for discovering servers to join.
+  -retry-join-ecs-network-type
+                            ECS instance network type.
+  -retry-join-ecs-tag-key   ECS tag key to filter on for server discovery
+  -retry-join-ecs-tag-value ECS tag value to filter on for server discovery
   -retry-join-wan=1.2.3.4   Address of an agent to join -wan at start time with
                             retries enabled. Can be specified multiple times.
   -retry-interval-wan=30s   Time to wait between join -wan attempts.

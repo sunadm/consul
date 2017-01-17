@@ -305,6 +305,41 @@ func TestDiscoverEC2Hosts(t *testing.T) {
 	}
 }
 
+func TestDiscoverECSHosts(t *testing.T) {
+	if os.Getenv("ALIYUN_REGION") == "" {
+		t.Skip("ALIYUN_REGION not set, skipping")
+	}
+
+	if os.Getenv("ALIYUN_NETWORK_TYPE") == "" {
+		t.Skip("ALIYUN_NETWORK_TYPE not set, skipping")
+	}
+
+	if os.Getenv("ALIYUN_ACCESS_KEY_ID") == "" {
+		t.Skip("ALIYUN_ACCESS_KEY_ID not set, skipping")
+	}
+
+	if os.Getenv("ALIYUN_SECRET_ACCESS_KEY") == "" {
+		t.Skip("ALIYUN_SECRET_ACCESS_KEY not set, skipping")
+	}
+
+	c := &Config{
+		RetryJoinECS: RetryJoinECS{
+			Region:      os.Getenv("ALIYUN_REGION"),
+			NetworkType: "classic",
+			TagKey:      "ConsulRole",
+			TagValue:    "Server",
+		},
+	}
+
+	servers, err := c.discoverEcsHosts(&log.Logger{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(servers) != 3 {
+		t.Fatalf("bad: %v", servers)
+	}
+}
+
 func TestSetupAgent_RPCUnixSocket_FileExists(t *testing.T) {
 	conf := nextConfig()
 	tmpDir, err := ioutil.TempDir("", "consul")
